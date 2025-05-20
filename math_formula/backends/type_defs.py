@@ -118,6 +118,8 @@ class OpType(IntEnum):
     RENAME_NODE = auto()
     # Clear the stack.
     END_OF_STATEMENT = auto()
+    # Workaround for getting a list of geometries into the join_geometry node.
+    PACK_LIST = auto()
 
 
 @dataclass

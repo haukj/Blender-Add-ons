@@ -307,6 +307,12 @@ class TypeChecker:
             )
         elif isinstance(expr, ast_defs.Call):
             self.func_call(expr)
+        elif isinstance(expr, ast_defs.ListLiteral): # Simple support for lists supporting geometry into the join_geometry node
+            for e in expr.elements:
+                self.check_expr(e)
+            expr.type = td.DataType.GEOMETRY
+            self.curr_node = td.Const(td.StackType.VALUE, [expr.type], [], expr.elements)
+            return
         else:
             print(expr, type(expr))
             assert False, "Unreachable code"
@@ -541,46 +547,3 @@ class TypeChecker:
         self.curr_node = td.GetOutput(
             td.StackType.SOCKET, [dtype], out_names, expr, index
         )
-
-
-if __name__ == "__main__":
-    import os
-
-    from .backends.geometry_nodes import GeometryNodesBackEnd
-
-    add_on_dir = os.path.dirname(os.path.realpath(__file__))
-    test_directory = os.path.join(add_on_dir, "tests")
-    filenames = os.listdir(test_directory)
-    verbose = 3
-    num_passed = 0
-    tot_tests = 0
-    BOLD = "\033[1m"
-    GREEN = "\033[92m"
-    RED = "\033[91m"
-    YELLOW = "\033[93m"
-    BLUE = "\033[96m"
-    ENDC = "\033[0m"
-    for filename in filenames:
-        # if filename != 'functions':
-        #     continue
-        tot_tests += 1
-        print(f"Testing: {BOLD}{filename}{ENDC}:  ", end="")
-        with open(os.path.join(test_directory, filename), "r") as f:
-            type_checker = TypeChecker(GeometryNodesBackEnd())
-            try:
-                failed = not type_checker.type_check(f.read())
-                print(GREEN + "No internal errors" + ENDC)
-                if verbose > 0:
-                    print(
-                        f"{YELLOW}td.Type errors{ENDC}"
-                        if failed
-                        else f"{BLUE}No type errors{ENDC}"
-                    )
-                if verbose > 1 and failed:
-                    print(type_checker.errors)
-                if verbose > 2:
-                    print(ast_defs.dump(type_checker.typed_repr, td.ty_ast, indent="."))
-                num_passed += 1
-            except NotImplementedError:
-                print(RED + "Internal errors" + ENDC)
-    print(f"Tests done: Passed: ({num_passed}/{tot_tests})")

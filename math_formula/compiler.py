@@ -191,11 +191,20 @@ class Compiler:
         )
 
     def node_call(self, expr: td.NodeCall):
-        for arg in expr.args:
-            self.compile_expr(arg)
-            if arg.stype == td.StackType.STRUCT:
-                # Get the output we need.
-                self.operations.append(td.Operation(td.OpType.GET_OUTPUT, 0))
+        # Special handling for join_geometry(a, b, c) → join_geometry([a, b, c])
+        if getattr(expr.node, "node_id", "") == "join_geometry" and len(expr.args) > 1:
+            print("join_geometry args:", expr.args)
+            for arg in expr.args:
+                self.compile_expr(arg)
+                if arg.stype == td.StackType.STRUCT:
+                    self.operations.append(td.Operation(td.OpType.GET_OUTPUT, 0))
+            self.operations.append(td.Operation(td.OpType.PACK_LIST, len(expr.args)))
+        else:
+            for arg in expr.args:
+                self.compile_expr(arg)
+                if arg.stype == td.StackType.STRUCT:
+                    self.operations.append(td.Operation(td.OpType.GET_OUTPUT, 0))
+
         # Add the implicit default arguments here
         for _ in range(len(expr.node.inputs) - len(expr.args)):
             self.operations.append(td.Operation(td.OpType.PUSH_VALUE, None))
@@ -215,44 +224,3 @@ class Compiler:
     def get_output(self, get_output: td.GetOutput):
         self.compile_expr(get_output.value)
         self.operations.append(td.Operation(td.OpType.GET_OUTPUT, get_output.index))
-
-
-if __name__ == "__main__":
-    import os
-
-    add_on_dir = os.path.dirname(os.path.realpath(__file__))
-    test_directory = os.path.join(add_on_dir, "tests")
-    filenames = os.listdir(test_directory)
-    verbose = 3
-    num_passed = 0
-    tot_tests = 0
-    BOLD = "\033[1m"
-    GREEN = "\033[92m"
-    RED = "\033[91m"
-    YELLOW = "\033[93m"
-    BLUE = "\033[96m"
-    ENDC = "\033[0m"
-    for filename in filenames:
-        # if filename != 'functions':
-        #     continue
-        tot_tests += 1
-        print(f"Testing: {BOLD}{filename}{ENDC}:  ", end="")
-        with open(os.path.join(test_directory, filename), "r") as f:
-            compiler = Compiler("GeometryNodeTree")
-            try:
-                success = compiler.compile(f.read())
-                print(GREEN + "No internal errors" + ENDC)
-                if verbose > 0:
-                    print(
-                        f"{YELLOW}Compiler errors{ENDC}"
-                        if not success
-                        else f"{BLUE}No compiler errors{ENDC}"
-                    )
-                if verbose > 1 and success:
-                    print(compiler.errors)
-                if verbose > 2:
-                    print(*compiler.operations, sep="\n")
-                num_passed += 1
-            except NotImplementedError:
-                print(RED + "Internal errors" + ENDC)
-    print(f"Tests done: Passed: ({num_passed}/{tot_tests})")

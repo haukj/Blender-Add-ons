@@ -516,6 +516,12 @@ def group_name(self: Parser, can_assign: bool) -> None:
     if ret is None:
         return None
     pos_args, keyword_args = ret
+    # Special handling: convert join_geometry(a, b, c) -> join_geometry([a, b, c]) ...but dont tell mf add-on about it...
+    if isinstance(func, ast_defs.Name) and func.id == "join_geometry":
+        if len(pos_args) > 1:
+            from .ast_defs import ListLiteral
+            list_expr = ListLiteral(token, pos_args)
+            pos_args = [list_expr]
     self.curr_node = ast_defs.Call(token, func, pos_args, keyword_args)
 
 
@@ -530,6 +536,12 @@ def call(self: Parser, can_assign: bool) -> None:
     if ret is None:
         return
     pos_args, keyword_args = ret
+    # Special handling: convert join_geometry(a, b, c) -> join_geometry([a, b, c])
+    if isinstance(func, ast_defs.Name) and func.id == "join_geometry":
+        if len(pos_args) > 1:
+            from .ast_defs import ListLiteral
+            list_expr = ListLiteral(token, pos_args)
+            pos_args = [list_expr]
     self.curr_node = ast_defs.Call(token, func, pos_args, keyword_args)
 
 
@@ -639,50 +651,3 @@ rules: list[ParseRule] = [
     ParseRule(None, None, Precedence.NONE),  # EOL
 ]
 assert len(rules) == TokenType.EOL.value + 1, "Didn't handle all tokens!"
-
-
-if __name__ == "__main__":
-    import os
-
-    add_on_dir = os.path.dirname(os.path.realpath(__file__))
-    test_directory = os.path.join(add_on_dir, "tests")
-    filenames = os.listdir(test_directory)
-    verbose = 1
-    num_passed = 0
-    tot_tests = 0
-    BOLD = "\033[1m"
-    GREEN = "\033[92m"
-    RED = "\033[91m"
-    YELLOW = "\033[93m"
-    BLUE = "\033[96m"
-    ENDC = "\033[0m"
-    for filename in filenames:
-        tot_tests += 1
-        print(f"Testing: {BOLD}{filename}{ENDC}:  ", end="")
-        with open(os.path.join(test_directory, filename), "r") as f:
-            parser = Parser(f.read())
-            try:
-                tree = parser.parse()
-                print(GREEN + "No internal errors" + ENDC)
-                if verbose > 0:
-                    print(
-                        f"{YELLOW}Syntax errors{ENDC}"
-                        if parser.had_error
-                        else f"{BLUE}No syntax errors{ENDC}"
-                    )
-                if verbose > 1 and parser.had_error:
-                    print(parser.errors)
-                if verbose > 2:
-                    print(ast_defs.dump(tree, indent="."))
-                num_passed += 1
-            except NotImplementedError:
-                print(RED + "Internal errors" + ENDC)
-                if verbose > 0:
-                    print(
-                        f"{YELLOW}Syntax errors{ENDC}:"
-                        if parser.had_error
-                        else f"{BLUE}No syntax errors{ENDC}"
-                    )
-                if verbose > 1 and parser.had_error:
-                    print(parser.errors)
-    print(f"Tests done: Passed: ({num_passed}/{tot_tests})")

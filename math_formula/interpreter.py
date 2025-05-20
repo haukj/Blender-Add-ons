@@ -1,4 +1,5 @@
 from typing import cast
+from . import ast_defs
 
 import bpy
 from bpy.types import Node, NodeSocket
@@ -26,10 +27,21 @@ class Interpreter:
         # Variables in the form of output sockets
         self.variables: dict[str, ValueType | NodeSocket | list[NodeSocket]] = {}
         self.function_outputs: list[NodeSocket | None] = []
+        self.socket_table: dict[str, NodeSocket] = {}
 
     def operation(self, operation: Operation):
         op_type = operation.op_type
         op_data = operation.data
+        
+        # Handle ListLiteral values pushed onto the stack
+        if isinstance(op_data, ast_defs.ListLiteral):
+            evaluated_elements = []
+            for e in op_data.elements:
+                self.operation(Operation(OpType.PUSH_VALUE, e))
+                evaluated_elements.append(self.stack.pop())
+            self.stack.append(evaluated_elements)
+            return
+        
         assert (
             OpType.END_OF_STATEMENT.value == 11
         ), "Exhaustive handling of Operation types."
@@ -38,6 +50,9 @@ class Interpreter:
         elif op_type == OpType.CREATE_VAR:
             assert isinstance(op_data, str), "Variable name should be a string."
             socket = self.stack.pop()
+            while isinstance(socket, ast_defs.Name):
+                var_id = socket.id
+                socket = self.variables.get(var_id, socket)
             assert isinstance(
                 socket, (NodeSocket, list, int)
             ), "Create var expects a node socket or struct or loop index."
@@ -111,7 +126,9 @@ class Interpreter:
             )
             outputs = op_data.outputs
             if len(outputs) == 1:
-                self.stack.append(node.outputs[outputs[0]])
+                socket = node.outputs[outputs[0]]
+                self.socket_table[str(socket)] = socket
+                self.stack.append(socket)
             elif len(outputs) > 1:
                 self.stack.append([node.outputs[o] for o in reversed(outputs)])
             self.nodes.append(node)
@@ -119,6 +136,11 @@ class Interpreter:
             self.nodes[-1].label = op_data
         elif op_type == OpType.END_OF_STATEMENT:
             self.stack = []
+        elif op_type == OpType.PACK_LIST:
+            assert isinstance(op_data, int), "PACK_LIST expects an integer count."
+            elements = [self.stack.pop() for _ in range(op_data)]
+            elements.reverse()
+            self.stack.append(elements)
         else:
             print(f"Need implementation of {op_type}")
             raise NotImplementedError
@@ -141,9 +163,48 @@ class Interpreter:
             arg = args[i]
             if isinstance(arg, bpy.types.NodeSocket):
                 tree.links.new(arg, node.inputs[input_index])
-            elif arg is not None:
-                node.inputs[input_index].default_value = arg  # type: ignore
+            elif isinstance(arg, list):
+                # Special handling for Join Geometry multi-input
+                if node.bl_idname == 'GeometryNodeJoinGeometry':
+                    print("JOIN GEOMETRY DEBUG:")
+                    print(f"  - Node: {node}")
+                    print(f"  - Args: {args}")
+                    print(f"  - Inputs: {[i.name for i in node.inputs]}")
+                    for geo_input in reversed(arg):
+                        print(f"    - geo_input: {geo_input} ({type(geo_input)})")
+                        # Resolve Name references if necessary
+                        if isinstance(geo_input, ast_defs.Name):
+                            geo_input = self.variables.get(geo_input.id, geo_input)
+                        socket = self.get_output_socket(geo_input)
+                        print(f"    → socket from get_output_socket: {socket} ({type(socket)})")
+                        if isinstance(socket, bpy.types.NodeSocket):
+                            self.tree.links.new(socket, node.inputs["Geometry"])
+                else:
+                    input_socket = node.inputs[input_index]
+                    if isinstance(input_socket, bpy.types.NodeSocketGeometry):
+                        if hasattr(input_socket, "is_multi_input") and input_socket.is_multi_input:
+                            for geo_input in arg:
+                                if isinstance(geo_input, ast_defs.Name):
+                                    geo_input = self.variables.get(geo_input.id, geo_input)
+                                socket = self.get_output_socket(geo_input)
+                                if isinstance(socket, bpy.types.NodeSocket):
+                                    self.tree.links.new(socket, input_socket)
+                        elif isinstance(arg[0], bpy.types.NodeSocket):
+                            self.tree.links.new(arg[0], input_socket)
+            else:
+                input_socket = node.inputs[input_index]
+                if arg is not None:
+                    input_socket.default_value = arg  # type: ignore
         return node
+
+    def get_output_socket(self, value):
+        if isinstance(value, list):
+            return [self.get_output_socket(v) for v in value]
+        if str(value) in self.socket_table:
+            return self.socket_table[str(value)]
+        if hasattr(value, "socket"):
+            return value.socket
+        return value
 
     @staticmethod
     def data_type_to_socket_type(dtype: DataType) -> str:
